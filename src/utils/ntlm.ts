@@ -443,9 +443,18 @@ export function createType3Message(
     .update(ntlmv2.subarray(0, 16))
     .digest();
 
-  // ExportedSessionKey = random, encrypted with SessionBaseKey for key exchange
-  const exportedSessionKey = crypto.randomBytes(16);
-  const encryptedSessionKey = rc4Encrypt(sessionBaseKey, exportedSessionKey);
+  // Per MS-NLMP §3.2.5.1.2: only exchange/encrypt a session key when the
+  // server negotiated NTLMSSP_NEGOTIATE_KEY_EXCH (0x40000000). Otherwise
+  // ExportedSessionKey MUST equal SessionBaseKey verbatim, and the
+  // session-key security buffer MUST be empty.
+  const KEY_EXCH = 0x40000000;
+  const keyExchNegotiated = (type2Message.flags & KEY_EXCH) !== 0;
+  const exportedSessionKey = keyExchNegotiated
+    ? crypto.randomBytes(16)
+    : sessionBaseKey;
+  const encryptedSessionKey = keyExchNegotiated
+    ? rc4Encrypt(sessionBaseKey, exportedSessionKey)
+    : Buffer.alloc(0);
 
   buf.writeUInt16LE(encryptedSessionKey.length, 52);
   buf.writeUInt16LE(encryptedSessionKey.length, 54);
