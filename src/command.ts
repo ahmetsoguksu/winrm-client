@@ -152,25 +152,34 @@ function generatePowershellCommand(
   params: CommandParams,
   interactive = false
 ): string {
-  const args = [];
-  args.unshift('powershell.exe', '-NoProfile');
-
-  if (!interactive) {
-    args.push('-NonInteractive');
+  if (interactive) {
+    // Interactive commands still need a literal command line so the
+    // remote shell can prompt/respond on stdin.
+    const args = [
+      'powershell.exe',
+      '-NoProfile',
+      '-NoLogo',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-InputFormat',
+      'Text',
+      '-Command',
+      '"& {',
+      params.command,
+      '}"',
+    ];
+    return args.join(' ');
   }
 
-  args.push(
-    '-NoLogo',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-InputFormat',
-    'Text',
-    '-Command',
-    '"& {',
-    params.command,
-    '}"'
+  // -EncodedCommand (base64 UTF-16LE) avoids cmd.exe/PowerShell quote-escaping
+  // hazards entirely. The naive `-Command "& { ... }"` wrapping above breaks
+  // as soon as the script body contains a double quote (e.g. Write-Output
+  // "...", -Filter "...", any string literal), which cmd.exe treats as
+  // closing the outer quote and truncates/corrupts the script.
+  const encoded = Buffer.from(params.command ?? '', 'utf16le').toString(
+    'base64'
   );
-  return args.join(' ');
+  return `powershell.exe -NoProfile -NonInteractive -NoLogo -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
 }
 
 export async function doExecutePowershell(
