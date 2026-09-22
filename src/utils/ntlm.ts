@@ -32,9 +32,11 @@ function rc4Encrypt(key: Buffer, data: Buffer): Buffer {
   return out;
 }
 
-const NTLMFLAG_NEGOTIATE_OEM = 1 << 1;
-const NTLMFLAG_REQUEST_TARGET = 1 << 2;
-const NTLMFLAG_NEGOTIATE_NTLM = 1 << 9;
+const NTLMFLAG_NEGOTIATE_SIGN = 1 << 4;
+const NTLMFLAG_NEGOTIATE_SEAL = 1 << 5;
+const NTLMFLAG_NEGOTIATE_128 = 1 << 29;
+const NTLMFLAG_NEGOTIATE_KEY_EXCH = 1 << 30;
+const NTLMFLAG_NEGOTIATE_56 = 1 << 31;
 const NTLMFLAG_NEGOTIATE_ALWAYS_SIGN = 1 << 15;
 
 const NTLMFLAG_NEGOTIATE_UNICODE = 1 << 0;
@@ -104,8 +106,8 @@ export function createType1Message(
   workstation: string,
   domain: string
 ): string {
-  const domainBytes = Buffer.from(domain, 'ascii');
-  const workstationBytes = Buffer.from(workstation, 'ascii');
+  const domainBytes = Buffer.from(domain, 'ucs2');
+  const workstationBytes = Buffer.from(workstation, 'ucs2');
 
   // Header: 32 bytes fixed + domain + workstation
   const headerSize = 32;
@@ -119,13 +121,21 @@ export function createType1Message(
   buf.write(NTLMSIGNATURE, 0, 8, 'ascii');
   // Message type = 1
   buf.writeUInt32LE(1, 8);
-  // Flags: OEM | REQUEST_TARGET | NTLM | ALWAYS_SIGN | NTLM2_KEY
+  // Flags: UNICODE | SIGN | SEAL | ALWAYS_SIGN | NTLM2_KEY | 128 | KEY_EXCH | 56
+  // Must request KEY_EXCH/UNICODE here so the server's Type 2 grants them —
+  // otherwise the DC negotiates a weaker mode and rejects the Type 3
+  // authenticate message (NTLMv2 MIC/session-key computation depends on
+  // what got negotiated in this message).
   const flags =
-    NTLMFLAG_NEGOTIATE_OEM |
-    NTLMFLAG_REQUEST_TARGET |
-    NTLMFLAG_NEGOTIATE_NTLM |
-    NTLMFLAG_NEGOTIATE_ALWAYS_SIGN |
-    NTLMFLAG_NEGOTIATE_NTLM2_KEY;
+    (NTLMFLAG_NEGOTIATE_UNICODE |
+      NTLMFLAG_NEGOTIATE_SIGN |
+      NTLMFLAG_NEGOTIATE_SEAL |
+      NTLMFLAG_NEGOTIATE_ALWAYS_SIGN |
+      NTLMFLAG_NEGOTIATE_NTLM2_KEY |
+      NTLMFLAG_NEGOTIATE_128 |
+      NTLMFLAG_NEGOTIATE_KEY_EXCH |
+      NTLMFLAG_NEGOTIATE_56) >>>
+    0;
   buf.writeUInt32LE(flags, 12);
 
   // Domain security buffer (offset 16)
