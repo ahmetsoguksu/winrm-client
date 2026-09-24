@@ -100,6 +100,16 @@ export function extractStreams(
   }));
 }
 
+// True when a Receive response reports the command finished (rsp:CommandState State=".../Done").
+// Output arrives in chunks across several Receive calls; only Done means no more output follows.
+export function isCommandDone(response: unknown): boolean {
+  const state = extractValue(
+    response,
+    's:Envelope.s:Body.rsp:ReceiveResponse.rsp:CommandState'
+  );
+  return extractAttribute(state, 'State').endsWith('/CommandState/Done');
+}
+
 // Extract result from Send operation response
 export function extractSendResult(response: SendInputResponse): void {
   checkForSoapFault(response);

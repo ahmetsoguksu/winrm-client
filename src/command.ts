@@ -14,7 +14,7 @@ import { createLogger } from './utils/logger';
 import {
   extractCommandId,
   extractStreams,
-  extractValue,
+  isCommandDone,
   extractSendResult,
 } from './utils/xml-parser';
 
@@ -191,48 +191,49 @@ export async function doExecutePowershell(
 }
 
 export async function doReceiveOutput(params: CommandParams): Promise<string> {
-  const req = buildReceiveOutputRequest(params);
-
-  const result: ReceiveResponse = await sendHttp(
-    req,
-    params.host,
-    params.port,
-    params.path,
-    params.username,
-    params.password,
-    params.authMethod,
-    params.httpTimeout,
-    params.useHttps,
-    params.rejectUnauthorized
-  );
-
-  const streams = extractStreams(result);
-
   let successOutput = '';
   let failedOutput = '';
 
-  const rawStreams = extractValue(
-    result,
-    's:Envelope.s:Body.rsp:ReceiveResponse.rsp:Stream'
-  );
-
-  if (Array.isArray(rawStreams)) {
-    rawStreams.forEach((stream, index) => {
-      logger.debug(`stream ${index}`, {
-        fullStream: JSON.stringify(stream, null, 2),
-        dollarSign: stream?.$,
-        attributes: Object.keys(stream?.$ || {}),
-      });
-    });
-  }
-
-  for (const stream of streams) {
-    if (stream.name === 'stdout' && !stream.end) {
-      successOutput += Buffer.from(stream.content, 'base64').toString('ascii');
+  // WS-Man delivers output in chunks: keep issuing Receive until CommandState is Done.
+  // Returning after the first response loses everything that arrives later — e.g. PowerShell
+  // emits an early progress record on stderr ("#< CLIXML") and the real stdout comes after it.
+  for (;;) {
+    const req = buildReceiveOutputRequest(params);
+    let result: ReceiveResponse;
+    try {
+      result = await sendHttp(
+        req,
+        params.host,
+        params.port,
+        params.path,
+        params.username,
+        params.password,
+        params.authMethod,
+        params.httpTimeout,
+        params.useHttps,
+        params.rejectUnauthorized
+      );
+    } catch (err) {
+      // No output within OperationTimeout: the command is still running, receive again.
+      if (/TimedOut|2150858793/.test(String(err))) continue;
+      throw err;
     }
-    if (stream.name === 'stderr' && !stream.end) {
-      failedOutput += Buffer.from(stream.content, 'base64').toString('ascii');
+
+    const streams = extractStreams(result);
+    logger.debug('receive chunk', { streams: streams.length });
+
+    for (const stream of streams) {
+      if (stream.name === 'stdout' && !stream.end) {
+        successOutput += Buffer.from(stream.content, 'base64').toString(
+          'ascii'
+        );
+      }
+      if (stream.name === 'stderr' && !stream.end) {
+        failedOutput += Buffer.from(stream.content, 'base64').toString('ascii');
+      }
     }
+
+    if (isCommandDone(result)) break;
   }
 
   logger.debug('outputs', { successOutput, failedOutput });
@@ -267,7 +268,7 @@ export async function doReceiveOutputNonBlocking(
 
   let output = '';
   let stderr = '';
-  let isComplete = false;
+  let isComplete = isCommandDone(result);
 
   const streamData: StreamData[] = streams.map((stream) => ({
     name: stream.name,
